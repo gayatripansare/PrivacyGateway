@@ -1,0 +1,88 @@
+[
+  {
+    "timestamp": "2026-08-08 11:41:38",
+    "tool": "pending",
+    "total_redacted": 4,
+    "types_found": [
+      "EMAIL",
+      "NAME",
+      "CREDIT CARD",
+      "LOCATION"
+    ],
+    "high_count": 3,
+    "med_count": 1,
+    "low_count": 0
+  },
+  {
+    "timestamp": "2026-08-08 11:38:32",
+    "tool": "pending",
+    "total_redacted": 3,
+    "types_found": [
+      "EMAIL",
+      "CREDIT CARD",
+      "NAME"
+    ],
+    "high_count": 2,
+    "med_count": 1,
+    "low_count": 0
+  },
+  {
+    "timestamp": "2026-08-07 14:36:56",
+    "tool": "pending",
+    "total_redacted": 3,
+    "types_found": [
+      "LOCATION",
+      "NAME"
+    ],
+    "high_count": 0,
+    "med_count": 2,
+    "low_count": 1
+  },
+  {
+    "timestamp": "2026-08-07 14:07:40",
+    "tool": "pending",
+    "total_redacted": 1,
+    "types_found": [
+      "ORGANISATION"
+    ],
+    "high_count": 0,
+    "med_count": 0,
+    "low_count": 1
+  },
+  {
+    "timestamp": "2026-07-29 12:24:41",
+    "tool": "pending",
+    "total_redacted": 6,
+    "types_found": [
+      "ORGANISATION",
+      "DATE OF BIRTH",
+      "PHONE",
+      "NAME"
+    ],
+    "high_count": 1,
+    "med_count": 4,
+    "low_count": 1
+  },
+  {
+    "timestamp": "2026-07-28 16:57:13",
+    "tool": "pending",
+    "total_redacted": 28,
+    "types_found": [
+      "ORGANISATION",
+      "AWS KEY",
+      "AADHAAR",
+      "PAN",
+      "PASSWORD",
+      "NAME",
+      "EMAIL",
+      "BANK ACCOUNT",
+      "REFERENCE NAME",
+      "PHONE",
+      "CRYPTO WALLET",
+      "URL"
+    ],
+    "high_count": 6,
+    "med_count": 16,
+    "low_count": 6
+  }
+]
