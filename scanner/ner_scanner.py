@@ -5,15 +5,13 @@ try:
 except OSError:
     raise OSError("Run: python -m spacy download en_core_web_sm")
 
-# Only these entity types matter for privacy
 ENTITY_MAP = {
-    "PERSON": ("NAME",    "[NAME]",    "MED"),
-    "GPE":    ("LOCATION","[LOCATION]","LOW"),
-    "LOC":    ("ADDRESS", "[ADDRESS]", "MED"),
+    "PERSON": ("NAME",     "[NAME]",     "MED"),
+    "GPE":    ("LOCATION", "[LOCATION]", "LOW"),
+    "LOC":    ("ADDRESS",  "[ADDRESS]",  "MED"),
     "MONEY":  ("FINANCIAL","[FINANCIAL]","MED"),
 }
 
-# Common words NER wrongly tags — skip these
 FALSE_POSITIVES = {
     "i","we","he","she","it","they","you","me","us","him","her",
     "monday","tuesday","wednesday","thursday","friday","saturday","sunday",
@@ -27,9 +25,9 @@ FALSE_POSITIVES = {
     "what","when","where","who","why","how","which",
 }
 
-MIN_ENTITY_LENGTH = 4  # Skip very short entity matches
+MIN_ENTITY_LENGTH = 4
 
-def scan_text_ner(text):
+def scan_text_ner(text, document_type="General"):
     findings = []
     seen = set()
     doc = nlp(text)
@@ -37,13 +35,10 @@ def scan_text_ner(text):
         if ent.label_ not in ENTITY_MAP:
             continue
         value = ent.text.strip()
-        # Skip short values
         if len(value) < MIN_ENTITY_LENGTH:
             continue
-        # Skip false positives
         if value.lower() in FALSE_POSITIVES:
             continue
-        # Skip single common words
         words = value.split()
         if len(words) == 1 and value.lower() in FALSE_POSITIVES:
             continue
@@ -54,7 +49,8 @@ def scan_text_ner(text):
         findings.append({
             "type": ftype, "value": value,
             "replace": replace, "risk": risk,
-            "start": ent.start_char, "end": ent.end_char
+            "start": ent.start_char, "end": ent.end_char,
+            "ner_label": ent.label_,
         })
     findings.sort(key=lambda x: x["start"])
     return findings

@@ -20,16 +20,15 @@ PATTERNS = [
     ("IP ADDRESS",   "[IP]",           "MED",  r'\b(?:\d{1,3}\.){3}\d{1,3}\b'),
 ]
 
-MIN_VALUE_LENGTH = 5  # Never flag anything shorter than 5 chars
+MIN_VALUE_LENGTH = 5
 
-def scan_text_regex(text):
+def scan_text_regex(text, document_type="General"):
     findings = []
     seen = set()
     for ptype, replace, risk, pattern in PATTERNS:
         try:
             for match in re.finditer(pattern, text):
                 value = match.group().strip()
-                # Skip short values — too many false positives
                 if len(value) < MIN_VALUE_LENGTH:
                     continue
                 if value.lower() in seen:
