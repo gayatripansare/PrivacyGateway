@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PrivacyGate",
   "version": "1.0.0",
-  "description": "Automatically scans and cleans sensitive data before it reaches any AI tool or website.",
+  "description": "Scans and cleans ALL sensitive data before it reaches any website — text, files, images.",
 
   "permissions": [
     "clipboardRead",
@@ -25,7 +25,7 @@
     {
       "matches": ["*://*/*"],
       "js": ["scanner.js", "content.js"],
-      "run_at": "document_idle",
+      "run_at": "document_start",
       "all_frames": true
     }
   ],
