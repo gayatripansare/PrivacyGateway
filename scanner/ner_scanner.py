@@ -1,15 +1,29 @@
-import spacy
+"""
+scanner/ner_scanner.py - Optimized
+- Model loaded once at startup (not per call)
+- Runs in thread pool so it doesn't block the API
+- Skipped entirely for images (regex is enough)
+"""
 
+import spacy
+from concurrent.futures import ThreadPoolExecutor
+
+# Load once at import time — not per request
 try:
     nlp = spacy.load("en_core_web_sm")
+    # Disable unused pipes for speed
+    nlp.select_pipes(enable=["ner"])
 except OSError:
     raise OSError("Run: python -m spacy download en_core_web_sm")
 
+# Thread pool for NER (keeps API non-blocking)
+_executor = ThreadPoolExecutor(max_workers=2)
+
 ENTITY_MAP = {
-    "PERSON": ("NAME",     "[NAME]",     "MED"),
-    "GPE":    ("LOCATION", "[LOCATION]", "LOW"),
-    "LOC":    ("ADDRESS",  "[ADDRESS]",  "MED"),
-    "MONEY":  ("FINANCIAL","[FINANCIAL]","MED"),
+    "PERSON": ("NAME",      "[NAME]",     "MED"),
+    "GPE":    ("LOCATION",  "[LOCATION]", "LOW"),
+    "LOC":    ("ADDRESS",   "[ADDRESS]",  "MED"),
+    "MONEY":  ("FINANCIAL", "[FINANCIAL]","MED"),
 }
 
 FALSE_POSITIVES = {
@@ -27,10 +41,12 @@ FALSE_POSITIVES = {
 
 MIN_ENTITY_LENGTH = 4
 
-def scan_text_ner(text, document_type="General"):
+
+def _run_ner(text):
     findings = []
     seen = set()
-    doc = nlp(text)
+    # Limit text length for speed — NER on huge text is slow
+    doc = nlp(text[:10000])
     for ent in doc.ents:
         if ent.label_ not in ENTITY_MAP:
             continue
@@ -38,9 +54,6 @@ def scan_text_ner(text, document_type="General"):
         if len(value) < MIN_ENTITY_LENGTH:
             continue
         if value.lower() in FALSE_POSITIVES:
-            continue
-        words = value.split()
-        if len(words) == 1 and value.lower() in FALSE_POSITIVES:
             continue
         if value.lower() in seen:
             continue
@@ -54,3 +67,23 @@ def scan_text_ner(text, document_type="General"):
         })
     findings.sort(key=lambda x: x["start"])
     return findings
+
+
+def scan_text_ner(text, document_type="General"):
+    """
+    Run NER synchronously. Fast because:
+    - Model already loaded
+    - Pipes disabled except ner
+    - Text capped at 10000 chars
+    """
+    if not text or len(text.strip()) < 4:
+        return []
+    return _run_ner(text)
+
+
+def scan_text_ner_async(text):
+    """
+    Submit NER to thread pool. Returns a Future.
+    Use when you want to run NER in parallel with regex.
+    """
+    return _executor.submit(_run_ner, text)

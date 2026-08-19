@@ -1,5 +1,9 @@
 """
-api.py - PrivacyGate Background Service (FastAPI) - Optimized
+api.py - PrivacyGate Background Service (FastAPI) - Fully Optimized
+Key optimizations:
+  - Images: single OCR pass, NER skipped (regex only)
+  - All files: regex + NER run in parallel
+  - No serviceOnline pre-check (removed from extension too)
 """
 
 import os
@@ -14,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -22,7 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
 from scanner.regex_scanner import scan_text_regex
-from scanner.ner_scanner   import scan_text_ner
+from scanner.ner_scanner   import scan_text_ner, scan_text_ner_async
 from scanner.context_rules import apply_context_rules
 from redactor.text_redactor  import redact_text, redact_docx, redact_pdf
 from redactor.xlsx_redactor  import redact_xlsx, get_full_text_xlsx
@@ -90,8 +94,8 @@ def _log_scan(source, findings, file_name=None, file_type=None,
 TEMP_DIR = Path(tempfile.gettempdir()) / "privacygate_cleaned"
 TEMP_DIR.mkdir(exist_ok=True)
 
-def _temp_output_path(original_name: str) -> Path:
-    ext  = Path(original_name).suffix.lower()
+def _temp_output_path(original_name):
+    ext = Path(original_name).suffix.lower()
     return TEMP_DIR / f"pg_{uuid.uuid4().hex}{ext}"
 
 def _cleanup_old_temp_files():
@@ -106,24 +110,24 @@ def _cleanup_old_temp_files():
 # ── File type routing ─────────────────────────────────────
 
 TEXT_EXTENSIONS = {
-    ".txt", ".csv", ".json", ".jsonl", ".py", ".js", ".ts",
-    ".html", ".htm", ".xml", ".md", ".yaml", ".yml",
-    ".ini", ".cfg", ".env", ".sh", ".bat", ".sql",
-    ".log", ".jsx", ".tsx", ".css", ".scss",
+    ".txt",".csv",".json",".jsonl",".py",".js",".ts",
+    ".html",".htm",".xml",".md",".yaml",".yml",
+    ".ini",".cfg",".env",".sh",".bat",".sql",
+    ".log",".jsx",".tsx",".css",".scss",
 }
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
+IMAGE_EXTENSIONS = {".jpg",".jpeg",".png",".bmp",".webp",".gif"}
 
-def _get_file_type(filename: str) -> str:
+def _get_file_type(filename):
     ext = Path(filename).suffix.lower()
-    if ext in (".docx", ".doc"): return "docx"
-    if ext == ".pdf":            return "pdf"
-    if ext in (".xlsx", ".xlsm"): return "xlsx"
-    if ext == ".pptx":           return "pptx"
-    if ext in IMAGE_EXTENSIONS:  return "image"
-    if ext in TEXT_EXTENSIONS:   return "text"
+    if ext in (".docx",".doc"): return "docx"
+    if ext == ".pdf":           return "pdf"
+    if ext in (".xlsx",".xlsm"): return "xlsx"
+    if ext == ".pptx":          return "pptx"
+    if ext in IMAGE_EXTENSIONS: return "image"
+    if ext in TEXT_EXTENSIONS:  return "text"
     return "text"
 
-def _extract_text_from_file(file_path: Path, file_type: str) -> str:
+def _extract_text(file_path, file_type):
     if file_type == "text":
         return file_path.read_text(encoding="utf-8", errors="ignore")
     if file_type == "pdf":
@@ -147,91 +151,86 @@ def _extract_text_from_file(file_path: Path, file_type: str) -> str:
             raise HTTPException(500, "pip install python-docx")
     if file_type == "xlsx": return get_full_text_xlsx(str(file_path))
     if file_type == "pptx": return get_full_text_pptx(str(file_path))
-    # NOTE: images handled separately — no call here
     return ""
 
-def _run_scanner(text: str, sensitivity: str = "standard") -> list:
-    findings = []
-    findings.extend(scan_text_regex(text))
-    findings.extend(scan_text_ner(text))
+
+def _run_scanner(text, sensitivity="standard", skip_ner=False):
+    """
+    Run regex always.
+    Run NER in parallel unless skip_ner=True (images skip NER — regex is enough).
+    Merge and deduplicate results.
+    """
+    # Regex is fast — run synchronously
+    regex_findings = scan_text_regex(text)
+
+    if not skip_ner and text.strip():
+        # NER runs in thread pool — submit and wait
+        ner_future = scan_text_ner_async(text)
+        ner_findings = ner_future.result()  # waits for completion
+    else:
+        ner_findings = []
+
+    # Merge
+    all_findings = regex_findings + ner_findings
+
     if sensitivity == "deep":
-        findings = apply_context_rules(findings, text)
+        all_findings = apply_context_rules(all_findings, text)
+
+    # Deduplicate by value
     seen, unique = set(), []
-    for f in findings:
+    for f in all_findings:
         key = f.get("value", "").lower()
         if key and key not in seen:
             seen.add(key)
             unique.append(f)
+
     return unique
 
-def _redact_file(file_path: Path, file_type: str, findings: list,
-                 out_path: Path, ocr_text: str = None) -> Path:
-    """
-    Route to correct redactor. For images, ocr_text is already extracted
-    so we skip a second OCR pass inside redact_image.
-    """
+
+def _redact_file(file_path, file_type, findings, out_path):
     if not findings:
         shutil.copy2(str(file_path), str(out_path))
         return out_path
-
     if file_type == "text":
         text = file_path.read_text(encoding="utf-8", errors="ignore")
-        cleaned_text, _, _ = redact_text(text, findings)
-        out_path.write_text(cleaned_text, encoding="utf-8")
+        cleaned, _, _ = redact_text(text, findings)
+        out_path.write_text(cleaned, encoding="utf-8")
         return out_path
     if file_type == "pdf":
-        redact_pdf(str(file_path), findings, str(out_path))
-        return out_path
+        redact_pdf(str(file_path), findings, str(out_path)); return out_path
     if file_type == "docx":
-        redact_docx(str(file_path), findings, str(out_path))
-        return out_path
+        redact_docx(str(file_path), findings, str(out_path)); return out_path
     if file_type == "xlsx":
-        redact_xlsx(str(file_path), findings, str(out_path))
-        return out_path
+        redact_xlsx(str(file_path), findings, str(out_path)); return out_path
     if file_type == "pptx":
-        redact_pptx(str(file_path), findings, str(out_path))
-        return out_path
+        redact_pptx(str(file_path), findings, str(out_path)); return out_path
     if file_type == "image":
-        # Pass findings directly — image_redactor uses them to black out regions
-        # OCR already done above, no second pass needed
-        redact_image(str(file_path), findings, str(out_path))
-        return out_path
-
+        redact_image(str(file_path), findings, str(out_path)); return out_path
     shutil.copy2(str(file_path), str(out_path))
     return out_path
 
-# ── FastAPI app ───────────────────────────────────────────
+# ── FastAPI ───────────────────────────────────────────────
 
-app = FastAPI(
-    title="PrivacyGate",
-    description="Local privacy scanning service.",
-    version="1.0.0",
-    docs_url=None,
-    redoc_url=None,
-)
+app = FastAPI(title="PrivacyGate", version="1.0.0", docs_url=None, redoc_url=None)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware,
+    allow_origins=["*"], allow_credentials=False,
+    allow_methods=["*"], allow_headers=["*"])
 
 class TextScanRequest(BaseModel):
     text: str
     sensitivity: Optional[str] = "standard"
 
 class TextScanResponse(BaseModel):
-    scan_id:        str
+    scan_id: str
     findings_count: int
-    findings:       list
-    cleaned_text:   str
-    types_found:    list
-    high_count:     int
-    med_count:      int
-    low_count:      int
-    duration_ms:    int
+    findings: list
+    cleaned_text: str
+    types_found: list
+    high_count: int
+    med_count: int
+    low_count: int
+    duration_ms: int
 
 @app.get("/status")
 def status():
@@ -243,26 +242,23 @@ def scan_text_endpoint(req: TextScanRequest):
         raise HTTPException(400, "Text is empty.")
     start    = time.time()
     findings = _run_scanner(req.text, req.sensitivity or "standard")
-    cleaned_text, _, _ = redact_text(req.text, findings)
+    cleaned, _, _ = redact_text(req.text, findings)
     duration_ms = int((time.time() - start) * 1000)
     scan_id = _log_scan(source="text", findings=findings, duration_ms=duration_ms)
-    types_found = list(set(f.get("type", "") for f in findings))
-    high = sum(1 for f in findings if f.get("risk") == "HIGH")
-    med  = sum(1 for f in findings if f.get("risk") == "MED")
-    low  = sum(1 for f in findings if f.get("risk") == "LOW")
-    return TextScanResponse(
-        scan_id=scan_id, findings_count=len(findings), findings=findings,
-        cleaned_text=cleaned_text, types_found=types_found,
-        high_count=high, med_count=med, low_count=low, duration_ms=duration_ms,
-    )
+    types_found = list(set(f.get("type","") for f in findings))
+    high = sum(1 for f in findings if f.get("risk")=="HIGH")
+    med  = sum(1 for f in findings if f.get("risk")=="MED")
+    low  = sum(1 for f in findings if f.get("risk")=="LOW")
+    return TextScanResponse(scan_id=scan_id, findings_count=len(findings),
+        findings=findings, cleaned_text=cleaned, types_found=types_found,
+        high_count=high, med_count=med, low_count=low, duration_ms=duration_ms)
 
 @app.post("/scan-file")
 async def scan_file_endpoint(
-    file:        UploadFile = File(...),
-    sensitivity: str        = Form("standard"),
+    file: UploadFile = File(...),
+    sensitivity: str = Form("standard"),
 ):
     _cleanup_old_temp_files()
-
     filename  = file.filename or "upload"
     file_type = _get_file_type(filename)
     suffix    = Path(filename).suffix.lower()
@@ -273,50 +269,38 @@ async def scan_file_endpoint(
         content = await file.read()
         tmp_in.write_bytes(content)
         original_size = len(content)
-
         start = time.time()
 
-        # ── IMAGES: single OCR pass ───────────────────────
-        # Extract text once, reuse for both scanning and redaction.
-        # Old code called extract_text_image() here AND inside redact_image()
-        # = 2x OCR. Now we do it once and pass findings directly.
+        # ── Images: OCR once, skip NER ────────────────────
         if file_type == "image":
             try:
                 text = extract_text_image(str(tmp_in))
             except Exception as e:
                 raise HTTPException(422, f"OCR failed: {e}")
+            findings = _run_scanner(text, sensitivity, skip_ner=True)
+
+        # ── All other files: regex + NER parallel ─────────
         else:
             try:
-                text = _extract_text_from_file(tmp_in, file_type)
+                text = _extract_text(tmp_in, file_type)
             except Exception as e:
                 raise HTTPException(422, f"Could not read file: {e}")
+            findings = _run_scanner(text, sensitivity, skip_ner=False)
 
-        # Scan extracted text
-        findings = _run_scanner(text, sensitivity)
-
-        # Redact — for images, findings already have the PII values
-        # redact_image uses them to locate and black out text regions
         try:
             _redact_file(tmp_in, file_type, findings, out_path)
         except Exception as e:
             raise HTTPException(500, f"Redaction failed: {e}")
 
         duration_ms = int((time.time() - start) * 1000)
+        scan_id = _log_scan(source="file", findings=findings, file_name=filename,
+            file_type=file_type, original_size=original_size, duration_ms=duration_ms)
 
-        scan_id = _log_scan(
-            source="file", findings=findings, file_name=filename,
-            file_type=file_type, original_size=original_size, duration_ms=duration_ms,
-        )
-
-        types_found = list(set(f.get("type", "") for f in findings))
-        high = sum(1 for f in findings if f.get("risk") == "HIGH")
-        med  = sum(1 for f in findings if f.get("risk") == "MED")
-        low  = sum(1 for f in findings if f.get("risk") == "LOW")
-
-        findings_summary = [
-            {"type": f.get("type"), "replace": f.get("replace"), "risk": f.get("risk")}
-            for f in findings
-        ]
+        types_found = list(set(f.get("type","") for f in findings))
+        high = sum(1 for f in findings if f.get("risk")=="HIGH")
+        med  = sum(1 for f in findings if f.get("risk")=="MED")
+        low  = sum(1 for f in findings if f.get("risk")=="LOW")
+        findings_summary = [{"type":f.get("type"),"replace":f.get("replace"),"risk":f.get("risk")} for f in findings]
 
         import json
         return FileResponse(
@@ -334,22 +318,19 @@ async def scan_file_endpoint(
                 "X-Original-Filename": filename,
                 "X-Findings-Summary":  json.dumps(findings_summary),
                 "Access-Control-Expose-Headers": (
-                    "X-Scan-Id, X-Findings-Count, X-Types-Found, "
-                    "X-High-Count, X-Med-Count, X-Low-Count, "
-                    "X-Duration-Ms, X-Original-Filename, X-Findings-Summary"
+                    "X-Scan-Id,X-Findings-Count,X-Types-Found,"
+                    "X-High-Count,X-Med-Count,X-Low-Count,"
+                    "X-Duration-Ms,X-Original-Filename,X-Findings-Summary"
                 ),
             },
         )
-
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, f"Unexpected error: {e}")
     finally:
-        try:
-            tmp_in.unlink(missing_ok=True)
-        except Exception:
-            pass
+        try: tmp_in.unlink(missing_ok=True)
+        except Exception: pass
 
 @app.get("/stats")
 def get_stats():
@@ -360,12 +341,12 @@ def get_stats():
             SELECT COUNT(*) AS total_scans, SUM(findings_count) AS total_pii_blocked,
                    SUM(high_count) AS total_high, SUM(med_count) AS total_med,
                    SUM(low_count) AS total_low
-            FROM scans WHERE status = 'ok'
+            FROM scans WHERE status='ok'
         """).fetchone()
         today = datetime.date.today().isoformat()
         today_row = conn.execute("""
             SELECT COUNT(*) AS scans_today, SUM(findings_count) AS pii_today
-            FROM scans WHERE status = 'ok' AND timestamp LIKE ?
+            FROM scans WHERE status='ok' AND timestamp LIKE ?
         """, (f"{today}%",)).fetchone()
         type_counts = {}
         for r in conn.execute(
@@ -373,24 +354,23 @@ def get_stats():
         ).fetchall():
             try:
                 for t in json.loads(r["types_found"]):
-                    if t: type_counts[t] = type_counts.get(t, 0) + 1
-            except Exception:
-                pass
+                    if t: type_counts[t] = type_counts.get(t,0)+1
+            except Exception: pass
         file_types = conn.execute("""
             SELECT file_type, COUNT(*) as cnt FROM scans
             WHERE source='file' AND status='ok' AND file_type IS NOT NULL
             GROUP BY file_type ORDER BY cnt DESC
         """).fetchall()
         return {
-            "total_scans":       row["total_scans"]        or 0,
-            "total_pii_blocked": row["total_pii_blocked"]  or 0,
-            "total_high":        row["total_high"]         or 0,
-            "total_med":         row["total_med"]          or 0,
-            "total_low":         row["total_low"]          or 0,
-            "scans_today":       today_row["scans_today"]  or 0,
-            "pii_today":         today_row["pii_today"]    or 0,
+            "total_scans":       row["total_scans"]       or 0,
+            "total_pii_blocked": row["total_pii_blocked"] or 0,
+            "total_high":        row["total_high"]        or 0,
+            "total_med":         row["total_med"]         or 0,
+            "total_low":         row["total_low"]         or 0,
+            "scans_today":       today_row["scans_today"] or 0,
+            "pii_today":         today_row["pii_today"]   or 0,
             "type_breakdown":    type_counts,
-            "file_type_breakdown": {r["file_type"]: r["cnt"] for r in file_types},
+            "file_type_breakdown": {r["file_type"]:r["cnt"] for r in file_types},
         }
     finally:
         conn.close()
@@ -406,18 +386,13 @@ def get_history(limit: int = 50):
         ).fetchall()
         return {
             "records": [{
-                "id":             r["id"],
-                "timestamp":      r["timestamp"],
-                "source":         r["source"],
-                "file_name":      r["file_name"],
-                "file_type":      r["file_type"],
-                "findings_count": r["findings_count"],
-                "types_found":    json.loads(r["types_found"] or "[]"),
-                "high_count":     r["high_count"],
-                "med_count":      r["med_count"],
-                "low_count":      r["low_count"],
-                "duration_ms":    r["duration_ms"],
-                "status":         r["status"],
+                "id": r["id"], "timestamp": r["timestamp"],
+                "source": r["source"], "file_name": r["file_name"],
+                "file_type": r["file_type"], "findings_count": r["findings_count"],
+                "types_found": json.loads(r["types_found"] or "[]"),
+                "high_count": r["high_count"], "med_count": r["med_count"],
+                "low_count": r["low_count"], "duration_ms": r["duration_ms"],
+                "status": r["status"],
             } for r in rows],
             "total": len(rows),
         }

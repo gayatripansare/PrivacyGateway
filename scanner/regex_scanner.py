@@ -10,13 +10,15 @@ import re
 PATTERNS = [
 
     # ── CONTACT ──────────────────────────────────────────────────────────
-    ("EMAIL",        "[EMAIL]",        "HIGH", r'\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b'),
+    ("EMAIL",        "[EMAIL]",        "HIGH", r'\b[a-zA-Z0-9._%+\-]+\s*@\s*[a-zA-Z0-9.\-]+\s*\.\s*[a-zA-Z]{2,}\b'),
 
     # Indian mobile — all formats
     ("PHONE",        "[PHONE]",        "HIGH", r'(\+91|0091)[\s\-]?[6-9]\d{4}[\s\-]?\d{5}'),
     ("PHONE",        "[PHONE]",        "HIGH", r'\b(0)?[6-9]\d{4}[\s]?\d{5}\b'),
     # International
-    ("PHONE",        "[PHONE]",        "HIGH", r'\+[1-9]\d{1,3}[\s\-]\d{2,5}[\s\-]\d{3,5}([\s\-]\d{2,4})?'),
+    ("PHONE",        "[PHONE]",        "HIGH", r'\+[1-9]\d{0,3}(?:[\s().\-]*\d){8,14}\b'),
+    # OCR-tolerant international/national phone groups, including CV resumes
+    ("PHONE",        "[PHONE]",        "HIGH", r'(?<!\w)(?:\(?(?:00|\+)?\d{1,3}\)?[\s.\-]*)?(?:\(?\d{2,4}\)?[\s.\-]*)?\d{3,4}[\s.\-]+\d{2,4}(?:[\s.\-]+\d{2,4})?(?!\w)'),
     # US format
     ("PHONE",        "[PHONE]",        "HIGH", r'\b\d{3}[\s\-\.]\d{3}[\s\-\.]\d{4}\b'),
 
@@ -37,10 +39,12 @@ PATTERNS = [
 
     # ── FINANCIAL ────────────────────────────────────────────────────────
     ("CREDIT_CARD",  "[CARD]",         "HIGH", r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b'),
-    ("BANK_ACCOUNT", "[BANK_ACCT]",    "HIGH", r'\b[0-9]{9,18}\b'),
+    ("BANK_ACCOUNT", "[BANK_ACCT]",    "HIGH", r'\b(?:account|acct|a/c|bank\s*(?:account|a/c))\s*(?:number|no\.?|#)?\s*[:\-]?\s*\d{9,18}\b'),
     ("IFSC",         "[IFSC]",         "HIGH", r'\b[A-Z]{4}0[A-Z0-9]{6}\b'),
     ("UPI",          "[UPI]",          "HIGH", r'\b[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}\b'),
-    ("SWIFT",        "[SWIFT]",        "HIGH", r'\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\b'),
+    # SWIFT/BIC is intentionally context-gated below; a bare eight-letter
+    # token in a resume is too ambiguous to classify safely.
+    ("SWIFT",        "[SWIFT]",        "HIGH", r'\b(?:swift|bic)\s*(?:code|number|no\.?)?\s*[:#-]?\s*[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b'),
     ("IBAN",         "[IBAN]",         "HIGH", r'\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]{0,16})\b'),
 
     # ── CRYPTO ───────────────────────────────────────────────────────────
@@ -110,8 +114,12 @@ def scan_text_regex(text, document_type="General"):
                 if len(value) < MIN_VALUE_LENGTH:            continue
                 if value.lower() in SAFE_WORDS:              continue
                 if value.lower() in seen:                    continue
-                # Skip pure short numbers
-                if value.isdigit() and len(value) < 6:      continue
+                # A phone must contain at least ten digits. This avoids
+                # classifying resume years such as "2020 2024" as phones.
+                if ptype == "PHONE" and len(re.sub(r"\D", "", value)) < 10:
+                    continue
+                if value.isdigit() and len(value) < 6:
+                    continue
 
                 seen.add(value.lower())
                 findings.append({
@@ -125,5 +133,17 @@ def scan_text_regex(text, document_type="General"):
         except re.error:
             continue
 
-    findings.sort(key=lambda x: x["start"])
-    return findings
+    # Prefer complete/high-confidence findings when one detector returns a
+    # shorter span inside another, e.g. UPI inside a complete EMAIL.
+    priority = {"EMAIL": 100, "PHONE": 95, "CREDIT_CARD": 90, "UPI": 70}
+    findings.sort(key=lambda x: (x["start"], -(x["end"] - x["start"]), -priority.get(x["type"], 0)))
+    filtered = []
+    for finding in findings:
+        contained = any(
+            finding["start"] >= kept["start"] and finding["end"] <= kept["end"]
+            and priority.get(kept["type"], 0) >= priority.get(finding["type"], 0)
+            for kept in filtered
+        )
+        if not contained:
+            filtered.append(finding)
+    return filtered

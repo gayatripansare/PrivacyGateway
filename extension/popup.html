@@ -5,350 +5,74 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PrivacyGate</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      width: 320px;
-      min-height: 400px;
-      background: #000000;
-      color: #ffffff;
-      font-family: 'Segoe UI', Arial, sans-serif;
-      font-size: 13px;
-    }
-
-    /* ── HEADER ── */
-    .header {
-      background: #050505;
-      border-bottom: 1px solid #1a1a1a;
-      padding: 14px 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .logo {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .logo-icon {
-      width: 28px;
-      height: 28px;
-      background: #00f2ff;
-      border-radius: 6px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      color: #000;
-      font-weight: 900;
-    }
-
-    .logo-text {
-      font-size: 15px;
-      font-weight: 700;
-      color: #ffffff;
-    }
-
-    .logo-text span {
-      color: #00f2ff;
-    }
-
-    /* ── TOGGLE ── */
-    .toggle-wrap {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .toggle-label {
-      font-size: 11px;
-      color: #666;
-    }
-
-    .toggle {
-      position: relative;
-      width: 38px;
-      height: 20px;
-      cursor: pointer;
-    }
-
-    .toggle input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-
-    .toggle-slider {
-      position: absolute;
-      inset: 0;
-      background: #333;
-      border-radius: 20px;
-      transition: 0.2s;
-    }
-
-    .toggle-slider::before {
-      content: "";
-      position: absolute;
-      width: 14px;
-      height: 14px;
-      left: 3px;
-      top: 3px;
-      background: #666;
-      border-radius: 50%;
-      transition: 0.2s;
-    }
-
-    .toggle input:checked + .toggle-slider {
-      background: #00f2ff22;
-      border: 1px solid #00f2ff;
-    }
-
-    .toggle input:checked + .toggle-slider::before {
-      background: #00f2ff;
-      transform: translateX(18px);
-    }
-
-    /* ── SERVICE STATUS ── */
-    .service-status {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 16px;
-      background: #080808;
-      border-bottom: 1px solid #111;
-      font-size: 11px;
-    }
-
-    .status-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: #333;
-      flex-shrink: 0;
-    }
-
-    .status-dot.online  { background: #00cc88; box-shadow: 0 0 6px #00cc88; }
-    .status-dot.offline { background: #ff4444; box-shadow: 0 0 6px #ff4444; }
-
-    .status-text { color: #555; }
-
-    /* ── STATS GRID ── */
-    .stats-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1px;
-      background: #111;
-      border-bottom: 1px solid #111;
-    }
-
-    .stat-card {
-      background: #050505;
-      padding: 12px 14px;
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-    }
-
-    .stat-value {
-      font-size: 22px;
-      font-weight: 700;
-      color: #00f2ff;
-      line-height: 1;
-    }
-
-    .stat-label {
-      font-size: 10px;
-      color: #444;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    /* ── RISK BAR ── */
-    .risk-section {
-      padding: 10px 16px;
-      border-bottom: 1px solid #111;
-    }
-
-    .risk-label {
-      font-size: 10px;
-      color: #444;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 6px;
-    }
-
-    .risk-bars {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .risk-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .risk-name {
-      font-size: 10px;
-      width: 28px;
-      color: #555;
-    }
-
-    .risk-bar-bg {
-      flex: 1;
-      height: 4px;
-      background: #111;
-      border-radius: 2px;
-      overflow: hidden;
-    }
-
-    .risk-bar-fill {
-      height: 100%;
-      border-radius: 2px;
-      transition: width 0.4s ease;
-    }
-
-    .risk-count {
-      font-size: 10px;
-      color: #444;
-      width: 24px;
-      text-align: right;
-    }
-
-    /* ── TABS ── */
-    .tabs {
-      display: flex;
-      border-bottom: 1px solid #111;
-    }
-
-    .tab {
-      flex: 1;
-      padding: 8px;
-      text-align: center;
-      font-size: 11px;
-      color: #444;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: 0.15s;
-    }
-
-    .tab.active {
-      color: #00f2ff;
-      border-bottom-color: #00f2ff;
-    }
-
-    /* ── HISTORY ── */
-    .history-list {
-      max-height: 160px;
-      overflow-y: auto;
-    }
-
-    .history-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 16px;
-      border-bottom: 1px solid #0a0a0a;
-    }
-
-    .history-item:hover {
-      background: #050505;
-    }
-
-    .history-left {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .history-source {
-      font-size: 11px;
-      color: #aaa;
-      max-width: 180px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .history-time {
-      font-size: 10px;
-      color: #333;
-    }
-
-    .history-count {
-      font-size: 11px;
-      font-weight: 700;
-      color: #00f2ff;
-    }
-
-    /* ── TYPE BREAKDOWN ── */
-    .type-list {
-      padding: 6px 0;
-      max-height: 160px;
-      overflow-y: auto;
-    }
-
-    .type-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 16px;
-    }
-
-    .type-name {
-      font-size: 11px;
-      color: #888;
-    }
-
-    .type-count {
-      font-size: 11px;
-      font-weight: 700;
-      color: #00f2ff;
-    }
-
-    /* ── EMPTY STATE ── */
-    .empty {
-      padding: 24px 16px;
-      text-align: center;
-      color: #333;
-      font-size: 12px;
-    }
-
-    /* ── LOADING ── */
-    .loading {
-      padding: 16px;
-      text-align: center;
-      color: #333;
-      font-size: 12px;
-    }
-
-    /* ── SCROLLBAR ── */
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: #000; }
-    ::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
-
-    /* ── TODAY BADGE ── */
-    .today-badge {
-      font-size: 9px;
-      background: #00f2ff22;
-      color: #00f2ff;
-      border: 1px solid #00f2ff44;
-      border-radius: 3px;
-      padding: 1px 5px;
-      margin-left: 4px;
-    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { width:320px; min-height:400px; background:#000; color:#fff;
+      font-family:'Segoe UI',Arial,sans-serif; font-size:13px; }
+    .header { background:#050505; border-bottom:1px solid #1a1a1a;
+      padding:14px 16px; display:flex; align-items:center; justify-content:space-between; }
+    .logo { display:flex; align-items:center; gap:8px; }
+    .logo-icon { width:28px; height:28px; background:#00f2ff; border-radius:6px;
+      display:flex; align-items:center; justify-content:center;
+      font-size:14px; color:#000; font-weight:900; }
+    .logo-text { font-size:15px; font-weight:700; color:#fff; }
+    .logo-text span { color:#00f2ff; }
+    .toggle-wrap { display:flex; align-items:center; gap:8px; }
+    .toggle-label { font-size:11px; color:#666; }
+    .toggle { position:relative; width:38px; height:20px; cursor:pointer; }
+    .toggle input { opacity:0; width:0; height:0; }
+    .toggle-slider { position:absolute; inset:0; background:#333;
+      border-radius:20px; transition:0.2s; }
+    .toggle-slider::before { content:""; position:absolute; width:14px; height:14px;
+      left:3px; top:3px; background:#666; border-radius:50%; transition:0.2s; }
+    .toggle input:checked + .toggle-slider { background:#00f2ff22; border:1px solid #00f2ff; }
+    .toggle input:checked + .toggle-slider::before { background:#00f2ff; transform:translateX(18px); }
+    .service-status { display:flex; align-items:center; gap:6px; padding:8px 16px;
+      background:#080808; border-bottom:1px solid #111; font-size:11px; }
+    .status-dot { width:7px; height:7px; border-radius:50%; background:#333; flex-shrink:0; }
+    .status-dot.online  { background:#00cc88; box-shadow:0 0 6px #00cc88; }
+    .status-dot.offline { background:#ff4444; box-shadow:0 0 6px #ff4444; }
+    .status-text { color:#555; }
+    .stats-grid { display:grid; grid-template-columns:1fr 1fr;
+      gap:1px; background:#111; border-bottom:1px solid #111; }
+    .stat-card { background:#050505; padding:12px 14px;
+      display:flex; flex-direction:column; gap:3px; }
+    .stat-value { font-size:22px; font-weight:700; color:#00f2ff; line-height:1; }
+    .stat-label { font-size:10px; color:#444; text-transform:uppercase; letter-spacing:0.5px; }
+    .risk-section { padding:10px 16px; border-bottom:1px solid #111; }
+    .risk-label { font-size:10px; color:#444; text-transform:uppercase;
+      letter-spacing:0.5px; margin-bottom:6px; }
+    .risk-bars { display:flex; flex-direction:column; gap:4px; }
+    .risk-row { display:flex; align-items:center; gap:8px; }
+    .risk-name { font-size:10px; width:28px; color:#555; }
+    .risk-bar-bg { flex:1; height:4px; background:#111; border-radius:2px; overflow:hidden; }
+    .risk-bar-fill { height:100%; border-radius:2px; transition:width 0.4s ease; }
+    .risk-count { font-size:10px; color:#444; width:24px; text-align:right; }
+    .tabs { display:flex; border-bottom:1px solid #111; }
+    .tab { flex:1; padding:8px; text-align:center; font-size:11px; color:#444;
+      cursor:pointer; border-bottom:2px solid transparent; transition:0.15s; }
+    .tab.active { color:#00f2ff; border-bottom-color:#00f2ff; }
+    .history-list { max-height:160px; overflow-y:auto; }
+    .history-item { display:flex; align-items:center; justify-content:space-between;
+      padding:8px 16px; border-bottom:1px solid #0a0a0a; }
+    .history-item:hover { background:#050505; }
+    .history-left { display:flex; flex-direction:column; gap:2px; }
+    .history-source { font-size:11px; color:#aaa; max-width:180px;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .history-time { font-size:10px; color:#333; }
+    .history-count { font-size:11px; font-weight:700; color:#00f2ff; }
+    .type-list { padding:6px 0; max-height:160px; overflow-y:auto; }
+    .type-item { display:flex; align-items:center; justify-content:space-between; padding:6px 16px; }
+    .type-name { font-size:11px; color:#888; }
+    .type-count { font-size:11px; font-weight:700; color:#00f2ff; }
+    .empty { padding:24px 16px; text-align:center; color:#333; font-size:12px; }
+    .loading { padding:16px; text-align:center; color:#333; font-size:12px; }
+    ::-webkit-scrollbar { width:4px; }
+    ::-webkit-scrollbar-track { background:#000; }
+    ::-webkit-scrollbar-thumb { background:#222; border-radius:2px; }
   </style>
 </head>
 <body>
 
-  <!-- HEADER -->
   <div class="header">
     <div class="logo">
       <div class="logo-icon">P</div>
@@ -363,13 +87,11 @@
     </div>
   </div>
 
-  <!-- SERVICE STATUS -->
   <div class="service-status">
     <div class="status-dot" id="status-dot"></div>
     <span class="status-text" id="status-text">Checking service...</span>
   </div>
 
-  <!-- STATS -->
   <div class="stats-grid">
     <div class="stat-card">
       <div class="stat-value" id="stat-total-scans">—</div>
@@ -389,7 +111,6 @@
     </div>
   </div>
 
-  <!-- RISK BARS -->
   <div class="risk-section">
     <div class="risk-label">Risk Breakdown</div>
     <div class="risk-bars">
@@ -417,20 +138,18 @@
     </div>
   </div>
 
-  <!-- TABS -->
+  <!-- TABS — no inline onclick, handled in popup.js -->
   <div class="tabs">
-    <div class="tab active" id="tab-history" onclick="showTab('history')">History</div>
-    <div class="tab" id="tab-types" onclick="showTab('types')">PII Types</div>
+    <div class="tab active" id="tab-history">History</div>
+    <div class="tab" id="tab-types">PII Types</div>
   </div>
 
-  <!-- HISTORY TAB -->
   <div id="panel-history">
     <div class="history-list" id="history-list">
       <div class="loading">Loading history...</div>
     </div>
   </div>
 
-  <!-- TYPES TAB -->
   <div id="panel-types" style="display:none">
     <div class="type-list" id="type-list">
       <div class="loading">Loading...</div>
