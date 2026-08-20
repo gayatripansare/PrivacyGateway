@@ -24,6 +24,7 @@
   let lastInput  = null;
   const inputByFileKey = new Map();
   let cleanedClipboard = null;
+  let lastEditableTarget = null;
   let isDragging = false;
   let dragOffX   = 0;
   let dragOffY   = 0;
@@ -404,6 +405,7 @@ async () => {
       target.isContentEditable  || target.getAttribute("contenteditable") === "true"
     );
     if (!isEditable) return;
+    lastEditableTarget = target;
     let text = "";
     try { text = (e.clipboardData || window.clipboardData).getData("text/plain"); } catch { return; }
     if (!text || text.trim().length < 4) return;
@@ -421,6 +423,7 @@ async () => {
     e.stopPropagation();
     const cleaned = PrivacyGateScanner.cleanText(text, findings);
     cleanedClipboard = { original: text, cleaned, expires: Date.now() + 30000 };
+    chrome.runtime.sendMessage({ type: "TEXT_CLEANED", cleaned, findings }).catch(() => {});
     try {
       await navigator.clipboard.writeText(cleaned);
     } catch {
@@ -428,6 +431,60 @@ async () => {
     }
     showTextResult(findings);
   }, true);
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!message) return;
+    if (message.type === "INSERT_CLEAN_FILE") {
+      const input = lastInput && document.contains(lastInput) ? lastInput : document.querySelector('input[type="file"]');
+      if (!input || !message.file) {
+        sendResponse({ ok: false, error: "Select a file input on the source page first" });
+        return true;
+      }
+      try {
+        const clean = message.file instanceof File
+          ? message.file
+          : new File([message.file], message.name || "PrivacyGate_Cleaned_File", { type: message.mime || "application/octet-stream", lastModified: Date.now() });
+        const transfer = new DataTransfer();
+        transfer.items.add(clean);
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
+        if (!descriptor || !descriptor.set) throw new Error("FileList assignment is unsupported");
+        descriptor.set.call(input, transfer.files);
+        input.dataset.pgSkipNextChange = "1";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        sendResponse({ ok: true, name: clean.name, size: clean.size });
+      } catch (error) {
+        sendResponse({ ok: false, error: error.message });
+      }
+      return true;
+    }
+    if (message.type !== "INSERT_CLEAN_TEXT") return;
+    const text = String(message.text || "");
+    let inserted = false;
+    const target = lastEditableTarget && document.contains(lastEditableTarget) ? lastEditableTarget : document.activeElement;
+    try {
+      if (target && (target.isContentEditable || target.tagName === "TEXTAREA" || target.tagName === "INPUT")) {
+        target.focus();
+        if (target.isContentEditable) {
+          inserted = document.execCommand("insertText", false, text);
+          if (!inserted) target.textContent += text;
+        } else {
+          const start = typeof target.selectionStart === "number" ? target.selectionStart : target.value.length;
+          const end = typeof target.selectionEnd === "number" ? target.selectionEnd : target.value.length;
+          target.setRangeText(text, start, end, "end");
+          target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+          inserted = true;
+        }
+      }
+    } catch (error) {
+      console.warn("[PrivacyGate] direct Auto-Paste insertion failed", error);
+    }
+    if (!inserted) {
+      navigator.clipboard.writeText(text).then(() => showClean("Cleaned text copied; press Ctrl+V")).catch(() => {});
+    }
+    sendResponse({ ok: inserted, fallbackClipboard: !inserted });
+    return true;
+  });
 
   // ─────────────────────────────────────────────────────
   // 2. FILE INPUT CHANGE
@@ -464,12 +521,21 @@ async () => {
     setTimeout(removeBanner, 5000);
   }
 
+  function reportFileEvent(event) {
+    chrome.runtime.sendMessage({ type: "FILE_SCAN_EVENT", event }).catch(() => {});
+  }
+
   async function scanAndReplaceInput(inp, files) {
     const selected = files.filter(file => canIntercept(file.name));
     if (!selected.length) return;
     selected.forEach(file => inputByFileKey.set(fileKey(file), inp));
     showScanning(`${selected.length} file${selected.length === 1 ? "" : "s"}`);
-    const results = await mapWithLimit(selected, 2, file => scanFile(file));
+    selected.forEach(file => reportFileEvent({ kind: "file", name: file.name, status: "scanning", detail: "Scanning" }));
+    const results = await mapWithLimit(selected, 2, async file => {
+      const result = await scanFile(file);
+      reportFileEvent({ kind: "file", name: file.name, status: "cleaned", findings: result.count, detail: `${result.count} sensitive item(s)` });
+      return result;
+    });
     const cleanedFiles = results.map((result, index) => new File([result.blob], selected[index].name, {
       type: selected[index].type || result.blob.type || "application/octet-stream",
       lastModified: Date.now()
@@ -549,7 +615,12 @@ async () => {
     e.stopImmediatePropagation();
     try {
       const selected = files.filter(file => canIntercept(file.name));
-      const results = await mapWithLimit(selected, 2, file => scanFile(file));
+      selected.forEach(file => reportFileEvent({ kind: "file", name: file.name, status: "scanning", detail: "Scanning" }));
+      const results = await mapWithLimit(selected, 2, async file => {
+        const result = await scanFile(file);
+        reportFileEvent({ kind: "file", name: file.name, status: "cleaned", findings: result.count, detail: `${result.count} sensitive item(s)` });
+        return result;
+      });
       const transfer = new DataTransfer();
       results.forEach((result, index) => transfer.items.add(new File([result.blob], selected[index].name, {
         type: selected[index].type || result.blob.type || "application/octet-stream",
@@ -706,12 +777,14 @@ async () => {
       const cleaned = await mapWithLimit(msg.files, 2, async file => {
         if (!(file instanceof File) && !(file instanceof Blob)) throw new Error("Invalid upload object");
         const named = file instanceof File ? file : new File([file], "upload", { type: file.type || "application/octet-stream" });
+        reportFileEvent({ kind: "file", name: named.name, status: "scanning", detail: "Scanning" });
         showScanning(named.name);
         const result = await scanFile(named, undefined);
         const clean = new File([result.blob], named.name, {
           type: named.type || result.blob.type || "application/octet-stream",
           lastModified: Date.now()
         });
+        reportFileEvent({ kind: "file", name: named.name, status: "cleaned", findings: result.count, detail: `${result.count} sensitive item(s)` });
         if (result.count === 0) showClean(named.name);
         return clean;
       });

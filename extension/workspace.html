@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PrivacyGate Workspace</title>
+  <style>
+    :root{color-scheme:dark;--cyan:#00f2ff;--green:#00cc88;--orange:#ff9900;--red:#ff4444}
+    *{box-sizing:border-box}body{margin:0;background:#050505;color:#eee;font:14px/1.45 system-ui,Segoe UI,sans-serif}
+    header{display:flex;justify-content:space-between;align-items:center;padding:18px 24px;border-bottom:1px solid #1b1b1b;background:#090909;position:sticky;top:0;z-index:2}
+    h1{font-size:20px;margin:0}h1 span{color:var(--cyan)}.sub{color:#777;font-size:12px;margin-top:3px}
+    main{max-width:980px;margin:0 auto;padding:24px}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+    button{border:1px solid #254347;background:#0b2528;color:var(--cyan);border-radius:8px;padding:10px 14px;cursor:pointer;font-weight:700}button:hover{background:#10363a}button:disabled{opacity:.45;cursor:not-allowed}
+    .card{border:1px solid #1c1c1c;border-radius:12px;background:#0a0a0a;padding:16px;margin-bottom:16px}.card h2{font-size:14px;margin:0 0 12px;color:#aaa}
+    #event-list{display:grid;gap:8px}.event{display:grid;grid-template-columns:130px 1fr auto;gap:12px;align-items:center;padding:12px;border:1px solid #191919;border-radius:8px;background:#080808}.name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{font-weight:700}.queued{color:#888}.scanning{color:var(--cyan)}.cleaned{color:var(--green)}.blocked{color:var(--red)}.failed{color:var(--orange)}
+    .empty{color:#666;padding:32px;text-align:center}.hint{color:#888;font-size:12px}.count{color:var(--cyan);font-size:22px;font-weight:800}.success{border-color:#145e49}.error{border-color:#69302b}
+  </style>
+</head>
+<body>
+<header><div><h1>Privacy<span>Gate</span> Workspace</h1><div class="sub">Files and text are scanned before reaching AI tools.</div></div><div id="service">Checking scanner…</div></header>
+<main>
+  <div class="toolbar"><button id="open-source">Focus source page</button><button id="auto-paste" disabled>Auto-Paste Clean Text</button><button id="clear-events">Clear activity</button></div>
+  <section class="card"><h2>Current activity</h2><div class="count" id="summary">0 scans</div><div class="hint" id="summary-detail">Waiting for uploads or text paste.</div></section>
+  <section class="card"><h2>Files and text</h2><div id="event-list"><div class="empty">No activity yet. Upload files or paste text on the source page.</div></div></section>
+</main>
+<script src="workspace.js"></script>
+</body>
+</html>

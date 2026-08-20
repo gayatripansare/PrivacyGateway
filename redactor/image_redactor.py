@@ -114,8 +114,28 @@ def _redact_ocr_regions(cv_image, findings):
         for word in words:
             by_line.setdefault(word["line"], []).append(word)
 
+        # Derive contact findings directly from the OCR word lines as a
+        # fallback. The API's text OCR and this bounding-box OCR can tokenize
+        # punctuation differently, so relying only on the API findings can
+        # miss a phone such as "+91 98 7654 3210".
+        all_findings = list(findings)
+        known = {_norm(f.get("value", "")) for f in all_findings}
+        contact_patterns = [
+            ("EMAIL", "[EMAIL]", "HIGH", r"[A-Za-z0-9._%+\-]+\s*@\s*[A-Za-z0-9.\-]+\s*\.\s*[A-Za-z]{2,}"),
+            ("PHONE", "[PHONE]", "HIGH", r"(?:\+91|0091)[\s.\-]*[6-9]\d{1}[\s.\-]*\d{4}[\s.\-]*\d{4}"),
+            ("PHONE", "[PHONE]", "HIGH", r"\b0?[6-9]\d{1}[\s.\-]*\d{4}[\s.\-]*\d{4}\b"),
+        ]
+        for line_words in by_line.values():
+            raw_line = " ".join(item["text"] for item in sorted(line_words, key=lambda item: item["box"][0]))
+            for ftype, replace, risk, pattern in contact_patterns:
+                for match in re.finditer(pattern, raw_line, re.IGNORECASE):
+                    value = match.group().strip()
+                    if _norm(value) not in known:
+                        all_findings.append({"type": ftype, "value": value, "replace": replace, "risk": risk})
+                        known.add(_norm(value))
+
         redacted = 0
-        for finding in findings:
+        for finding in all_findings:
             target = _norm(finding.get("value", ""))
             if len(target) < 4:
                 continue

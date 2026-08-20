@@ -13,8 +13,8 @@ PATTERNS = [
     ("EMAIL",        "[EMAIL]",        "HIGH", r'\b[a-zA-Z0-9._%+\-]+\s*@\s*[a-zA-Z0-9.\-]+\s*\.\s*[a-zA-Z]{2,}\b'),
 
     # Indian mobile — all formats
-    ("PHONE",        "[PHONE]",        "HIGH", r'(\+91|0091)[\s\-]?[6-9]\d{4}[\s\-]?\d{5}'),
-    ("PHONE",        "[PHONE]",        "HIGH", r'\b(0)?[6-9]\d{4}[\s]?\d{5}\b'),
+    ("PHONE",        "[PHONE]",        "HIGH", r'(?:\+91|0091)[\s.\-]*[6-9]\d{1}[\s.\-]*\d{4}[\s.\-]*\d{4}'),
+    ("PHONE",        "[PHONE]",        "HIGH", r'\b0?[6-9]\d{1}[\s.\-]*\d{4}[\s.\-]*\d{4}\b'),
     # International
     ("PHONE",        "[PHONE]",        "HIGH", r'\+[1-9]\d{0,3}(?:[\s().\-]*\d){8,14}\b'),
     # OCR-tolerant international/national phone groups, including CV resumes
