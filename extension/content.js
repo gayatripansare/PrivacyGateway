@@ -20,10 +20,25 @@
     "sh","bat","env","ini","cfg","sql","log",
   ]);
 
+  // Some AI sites rename selected files to UUIDs and remove the extension.
+  // Use the browser MIME type as a fallback so TXT/DOCX/PDF uploads are not
+  // silently ignored before the backend sees them.
+  const MIME_EXT = new Map([
+    ["text/plain", "txt"], ["text/csv", "csv"], ["application/pdf", "pdf"],
+    ["application/msword", "doc"],
+    ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"],
+    ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"],
+    ["application/vnd.ms-excel", "xlsm"],
+    ["application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"],
+    ["image/jpeg", "jpg"], ["image/png", "png"], ["image/webp", "webp"],
+    ["image/gif", "gif"], ["image/bmp", "bmp"],
+  ]);
+
   let pgEnabled  = true;
   let lastInput  = null;
   const inputByFileKey = new Map();
   let cleanedClipboard = null;
+  let lastClipboardFile = null;
   let lastEditableTarget = null;
   let isDragging = false;
   let dragOffX   = 0;
@@ -54,13 +69,56 @@
   // HELPERS
   // ─────────────────────────────────────────────────────
 
-  const getExt       = n => (n || "").split(".").pop().toLowerCase();
-  const canIntercept = n => INTERCEPT_EXT.has(getExt(n));
+  const getExt = n => {
+    const name = String(n || "").toLowerCase();
+    const dot = name.lastIndexOf(".");
+    return dot >= 0 ? name.slice(dot + 1) : "";
+  };
+  const fileExt = file => {
+    const named = getExt(file && file.name);
+    const mime = MIME_EXT.get((file && file.type) || "");
+    return INTERCEPT_EXT.has(named) ? named : (mime || named || "");
+  };
+  const canIntercept = fileOrName => {
+    if (typeof fileOrName === "string") return INTERCEPT_EXT.has(getExt(fileOrName));
+    // Unknown-name File objects are candidates; signature detection below
+    // will reject genuinely unsupported binary formats before upload.
+    return Boolean(fileOrName && (INTERCEPT_EXT.has(fileExt(fileOrName)) || !getExt(fileOrName.name)));
+  };
+  async function detectFileExtension(file) {
+    const known = fileExt(file);
+    if (INTERCEPT_EXT.has(known)) return known;
+    const bytes = new Uint8Array(await file.slice(0, Math.min(file.size, 4 * 1024 * 1024)).arrayBuffer());
+    const head = new TextDecoder("latin1").decode(bytes.subarray(0, 16));
+    if (head.startsWith("%PDF-")) return "pdf";
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "png";
+    if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg";
+    if (head.startsWith("GIF8")) return "gif";
+    if (head.startsWith("BM")) return "bmp";
+    if (head.startsWith("RIFF") && head.includes("WEBP")) return "webp";
+    if (bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) return "doc";
+    if (bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
+      const zipText = new TextDecoder("latin1").decode(bytes);
+      if (zipText.includes("word/")) return "docx";
+      if (zipText.includes("xl/")) return "xlsx";
+      if (zipText.includes("ppt/")) return "pptx";
+    }
+    const sample = new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(0, Math.min(bytes.length, 8192)));
+    const printable = [...sample].filter(ch => ch === "\n" || ch === "\r" || ch === "\t" || (ch >= " " && ch <= "~")).length;
+    if (sample && printable / Math.max(1, sample.length) > 0.92) return "txt";
+    return "";
+  }
+  const scanFilename = async file => {
+    const named = getExt(file && file.name);
+    const ext = await detectFileExtension(file);
+    if (!ext) throw new Error(`Unsupported or unidentified file format: ${file.name || "upload"}`);
+    return INTERCEPT_EXT.has(named) ? file.name : `${file.name || "upload"}.${ext}`;
+  };
 
   // Single call — no pre-check. If service offline, catch handles it.
   async function scanFile(file, signal) {
     const fd = new FormData();
-    fd.append("file", file, file.name);
+    fd.append("file", file, await scanFilename(file));
     fd.append("sensitivity", "standard");
     internalApiDepth++;
     try {
@@ -78,6 +136,11 @@
         low:     parseInt(r.headers.get("X-Low-Count")      || "0"),
         types:   r.headers.get("X-Types-Found")             || "",
         summary: r.headers.get("X-Findings-Summary")        || "[]",
+        state:   r.headers.get("X-PrivacyGate-State")       || "uncertain",
+        reason:  r.headers.get("X-PrivacyGate-Reason")      || "verification_header_missing",
+        remaining: r.headers.get("X-PrivacyGate-Remaining-PII") || "[]",
+        originalHash: r.headers.get("X-PrivacyGate-Original-Hash") || "",
+        cleanedHash: r.headers.get("X-PrivacyGate-Cleaned-Hash") || "",
       };
     } finally {
       internalApiDepth--;
@@ -100,23 +163,36 @@
       const transfer = new DataTransfer();
       transfer.items.add(clean);
       const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files");
-      if (!descriptor || !descriptor.set) return false;
-      descriptor.set.call(input, transfer.files);
-      return input.files && input.files.length === 1 && input.files[0].size === clean.size;
-    } catch (error) {
-      console.warn("[PrivacyGate] Could not replace input file", error);
-      return false;
+      if (descriptor && descriptor.set) {
+        descriptor.set.call(input, transfer.files);
+      } else {
+        input.files = transfer.files;
+      }
+      return Boolean(input.files && input.files.length === 1 && input.files[0].size === clean.size);
+    } catch (_) {
+      try {
+        input.files = transfer.files;
+        return Boolean(input.files && input.files.length === 1 && input.files[0].size === clean.size);
+      } catch (_) {
+        return false;
+      }
     }
   }
 
   function download(blob, name) {
+    if (!blob || !blob.size) throw new Error("Clean file is empty");
     const url = URL.createObjectURL(blob);
-    const a   = Object.assign(document.createElement("a"),
-                  { href: url, download: name, style: "display:none" });
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name || "PrivacyGate_Cleaned_File";
+    a.style.display = "none";
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
+    return true;
   }
+
+  
 
   // ─────────────────────────────────────────────────────
   // AUTO REPLACE in <input type="file">
@@ -229,6 +305,18 @@
     setTimeout(removeBanner, 4000);
   }
 
+  function showScanBlocked(name, reason) {
+    const b = makeBanner();
+    b.innerHTML = `${hdr("Upload Blocked", "#ff4444")}
+      <div style="padding:12px 14px;">
+        <div style="color:#ff4444;font-weight:700;margin-bottom:5px;">The original file was not sent.</div>
+        <div style="color:#888;font-size:11px;">${name}</div>
+        <div style="color:#666;font-size:11px;margin-top:6px;">PrivacyGate could not verify a clean result: ${String(reason).slice(0,160)}</div>
+      </div>`;
+    setupClose(b);
+    setTimeout(removeBanner, 10000);
+  }
+
   function showOffline() {
     const b = makeBanner();
     b.innerHTML = `${hdr("Service Offline", "#ff9900")}
@@ -314,10 +402,13 @@
     b.querySelector("#pg-auto").addEventListener("click", async () => {
       st.style.color = "#00f2ff";
       st.textContent = "Replacing...";
-      const ok = await onAuto();
+      const action = await onAuto();
+      const ok = action === true || action === "downloaded";
       st.style.color = ok ? "#00cc88" : "#ff9900";
-      st.textContent = ok ? "✓ Replaced — file is now clean!" : "Auto-replace failed — use Download instead.";
-      if (ok) setTimeout(removeBanner, 2000);
+      st.textContent = action === "downloaded"
+        ? "✓ Clean file downloaded — upload it manually."
+        : ok ? "✓ Replaced — file is now clean!" : "Auto-replace failed — use Download instead.";
+      if (ok) setTimeout(removeBanner, 3000);
     });
     b.querySelector("#pg-dl").addEventListener("click", () => {
       onDl();
@@ -332,7 +423,7 @@
   // ─────────────────────────────────────────────────────
 
   async function handleFile(file, replaceInInput) {
-    if (!pgEnabled || !canIntercept(file.name)) return;
+    if (!pgEnabled || !canIntercept(file)) return;
 
     // Cancel any previous scan
     cancelActiveScan("new file");
@@ -347,6 +438,7 @@
 
     try {
       const result = await scanFile(file, abortCtrl.signal);
+      if (result.state !== "verified") throw new Error(`Verification ${result.state}: ${result.reason}`);
 
       // If this scan was cancelled while waiting, do nothing
       if (activeScanId !== scanId) return;
@@ -359,9 +451,13 @@
 
       const cleanName = `PrivacyGate_Cleaned_${file.name}`;
       showFileResult(result, file.name,
-async () => {
+        async () => {
+          if (lastClipboardFile && lastClipboardFile.name === file.name) {
+            download(result.blob, cleanName);
+            return "downloaded";
+          }
           const ok = await autoReplace(result.blob, file.name, file);
-          if (!ok && replaceInInput) await replaceInInput(result.blob, file.name);
+          if (!ok && replaceInInput) return await replaceInInput(result.blob, file.name);
           return ok;
         },
         () => download(result.blob, cleanName)
@@ -395,6 +491,7 @@ async () => {
         e.stopPropagation();
         const ext  = file.type.split("/")[1] || "png";
         const named = new File([file], `clipboard_image.${ext}`, { type: file.type });
+        lastClipboardFile = named;
         await handleFile(named, null);
         return;
       }
@@ -526,13 +623,14 @@ async () => {
   }
 
   async function scanAndReplaceInput(inp, files) {
-    const selected = files.filter(file => canIntercept(file.name));
+    const selected = files.filter(file => canIntercept(file));
     if (!selected.length) return;
     selected.forEach(file => inputByFileKey.set(fileKey(file), inp));
     showScanning(`${selected.length} file${selected.length === 1 ? "" : "s"}`);
     selected.forEach(file => reportFileEvent({ kind: "file", name: file.name, status: "scanning", detail: "Scanning" }));
     const results = await mapWithLimit(selected, 2, async file => {
       const result = await scanFile(file);
+      if (result.state != "verified") throw new Error(`${file.name}: verification ${result.state}: ${result.reason}`);
       reportFileEvent({ kind: "file", name: file.name, status: "cleaned", findings: result.count, detail: `${result.count} sensitive item(s)` });
       return result;
     });
@@ -569,7 +667,7 @@ async () => {
       }
       const files = Array.from(inp.files);
       lastInput = inp;
-      if (!pgEnabled || !files.some(file => canIntercept(file.name))) return;
+      if (!pgEnabled || !files.some(file => canIntercept(file))) return;
       // Stop the host app's change listener from seeing originals. The clean
       // FileList is dispatched after bounded-concurrency scanning completes.
       e.preventDefault();
@@ -584,6 +682,32 @@ async () => {
       }
     }, true);
   }
+
+    // Capture file changes at document level as a second line of defense.
+  // This catches inputs created dynamically or inside an open shadow tree,
+  // before the host application's change handler can submit the original.
+  document.addEventListener("change", async e => {
+    const inp = e.target;
+    if (!(inp instanceof HTMLInputElement) || inp.type !== "file") return;
+    if (inp.dataset.pgSkipNextChange === "1" || inp.__pgDocumentScan) return;
+    if (!pgEnabled || !inp.files || inp.files.length === 0) return;
+    const files = Array.from(inp.files);
+    if (!files.some(file => canIntercept(file))) return;
+    inp.__pgDocumentScan = true;
+    lastInput = inp;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    try {
+      await scanAndReplaceInput(inp, files);
+    } catch (error) {
+      inp.value = "";
+      removeBanner();
+      showScanBlocked(files.map(file => file.name).join(", "), error.message || "Scan failed");
+      reportFileEvent({ kind: "file", name: files.map(file => file.name).join(", "), status: "blocked", detail: error.message || "Scan failed" });
+    } finally {
+      inp.__pgDocumentScan = false;
+    }
+  }, true);
 
   document.querySelectorAll('input[type="file"]').forEach(attachToInput);
 
@@ -610,14 +734,15 @@ async () => {
   document.addEventListener("drop", async e => {
     if (!pgEnabled || e.__privacyGateCleanDrop) return;
     const files = e.dataTransfer && Array.from(e.dataTransfer.files || []);
-    if (!files.length || !files.some(file => canIntercept(file.name))) return;
+    if (!files.length || !files.some(file => canIntercept(file))) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     try {
-      const selected = files.filter(file => canIntercept(file.name));
+      const selected = files.filter(file => canIntercept(file));
       selected.forEach(file => reportFileEvent({ kind: "file", name: file.name, status: "scanning", detail: "Scanning" }));
       const results = await mapWithLimit(selected, 2, async file => {
         const result = await scanFile(file);
+      if (result.state != "verified") throw new Error(`${file.name}: verification ${result.state}: ${result.reason}`);
         reportFileEvent({ kind: "file", name: file.name, status: "cleaned", findings: result.count, detail: `${result.count} sensitive item(s)` });
         return result;
       });
@@ -648,7 +773,7 @@ async () => {
     }
     let file = null;
     for (const [, v] of body.entries()) {
-      if (v instanceof File && canIntercept(v.name)) { file = v; break; }
+      if (v instanceof File && canIntercept(v)) { file = v; break; }
     }
     if (!file) return _XHRSend.apply(this, [body]);
 
@@ -683,19 +808,20 @@ async () => {
           }
         }
 
+        // Fail closed: submit only the cleaned FormData. The original is
+        // never sent after a successful scan with detected PII.
+        _XHRSend.apply(xhr, [newFD]);
         showFileResult(result, file.name,
-          async () => { _XHRSend.apply(xhr, [newFD]); return true; },
-          ()      => {
-            download(result.blob, `PrivacyGate_Cleaned_${file.name}`);
-            _XHRSend.apply(xhr, [body]);
-          }
+          async () => true,
+          () => download(result.blob, `PrivacyGate_Cleaned_${file.name}`)
         );
       } catch (e) {
         if (e.name === "AbortError") return;
         if (activeScanId !== scanId) return;
         activeScanId = null;
         removeBanner();
-        _XHRSend.apply(xhr, [body]);
+        showScanBlocked(file.name, e.message || "Scan failed");
+        try { xhr.dispatchEvent(new ProgressEvent("error")); } catch (_) {}
       }
     })();
   };
@@ -711,7 +837,7 @@ async () => {
     }
     let file = null;
     for (const [, v] of init.body.entries()) {
-      if (v instanceof File && canIntercept(v.name)) { file = v; break; }
+      if (v instanceof File && canIntercept(v)) { file = v; break; }
     }
     if (!file) return _fetch(input, init);
 
@@ -734,28 +860,27 @@ async () => {
         return _fetch(input, init);
       }
 
-      return new Promise(resolve => {
-        const newFD = new FormData();
-        for (const [k, v] of init.body.entries()) {
-          if (v instanceof File && v.name === file.name) {
-            newFD.append(k, new File([result.blob], v.name, { type: v.type }), v.name);
-          } else {
-            newFD.append(k, v);
-          }
+      const newFD = new FormData();
+      for (const [k, v] of init.body.entries()) {
+        if (v instanceof File && v.name === file.name) {
+          newFD.append(k, new File([result.blob], v.name, { type: v.type }), v.name);
+        } else {
+          newFD.append(k, v);
         }
-        showFileResult(result, file.name,
-          async () => { resolve(await _fetch(input, { ...init, body: newFD })); return true; },
-          async () => {
-            download(result.blob, `PrivacyGate_Cleaned_${file.name}`);
-            resolve(await _fetch(input, init));
-          }
-        );
-      });
+      }
+      // Fail closed: send only the cleaned FormData.
+      const response = await _fetch(input, { ...init, body: newFD });
+      showFileResult(result, file.name,
+        async () => true,
+        () => download(result.blob, `PrivacyGate_Cleaned_${file.name}`)
+      );
+      return response;
     } catch (e) {
-      if (activeScanId !== scanId) return _fetch(input, init);
+      if (activeScanId !== scanId) return Promise.reject(e);
       activeScanId = null;
       removeBanner();
-      return _fetch(input, init);
+      showScanBlocked(file.name, e.message || "Scan failed");
+      return Promise.reject(new Error("PrivacyGate blocked the upload because scanning failed"));
     }
   };
 
@@ -780,6 +905,7 @@ async () => {
         reportFileEvent({ kind: "file", name: named.name, status: "scanning", detail: "Scanning" });
         showScanning(named.name);
         const result = await scanFile(named, undefined);
+        if (result.state != "verified") throw new Error(`${named.name}: verification ${result.state}: ${result.reason}`);
         const clean = new File([result.blob], named.name, {
           type: named.type || result.blob.type || "application/octet-stream",
           lastModified: Date.now()

@@ -20,8 +20,10 @@
 <header><div><h1>Privacy<span>Gate</span> Workspace</h1><div class="sub">Files and text are scanned before reaching AI tools.</div></div><div id="service">Checking scanner…</div></header>
 <main>
   <div class="toolbar"><button id="open-source">Focus source page</button><button id="auto-paste" disabled>Auto-Paste Clean Text</button><button id="clear-events">Clear activity</button></div>
+  <section class="card"><h2>Scan files directly</h2><input id="workspace-files" type="file" multiple accept=".txt,.csv,.json,.pdf,.docx,.xlsx,.xlsm,.pptx,.png,.jpg,.jpeg,.bmp,.webp,.gif,.py,.js,.ts,.html,.md,.yaml,.yml,.xml,.log" /><div class="hint">Choose one or more original files. PrivacyGate will create verified clean copies before enabling upload or download.</div></section>
   <section class="card"><h2>Current activity</h2><div class="count" id="summary">0 scans</div><div class="hint" id="summary-detail">Waiting for uploads or text paste.</div></section>
   <section class="card"><h2>Files and text</h2><div id="event-list"><div class="empty">No activity yet. Upload files or paste text on the source page.</div></div></section>
+  <section class="card"><h2>Verified clean files</h2><div id="cleaned-files"><div class="empty">Select files above to create verified clean copies.</div></div></section>
 </main>
 <script src="workspace.js"></script>
 </body>

@@ -32,6 +32,7 @@ from redactor.text_redactor  import redact_text, redact_docx, redact_pdf
 from redactor.xlsx_redactor  import redact_xlsx, get_full_text_xlsx
 from redactor.pptx_redactor  import redact_pptx, get_full_text_pptx
 from redactor.image_redactor import redact_image, extract_text_image
+from verification import verify_cleaned_file
 
 # ── Database ──────────────────────────────────────────────
 
@@ -292,6 +293,12 @@ async def scan_file_endpoint(
         except Exception as e:
             raise HTTPException(500, f"Redaction failed: {e}")
 
+        verification = verify_cleaned_file(
+            original_path=str(tmp_in),
+            cleaned_path=str(out_path),
+            original_findings=findings,
+        )
+
         duration_ms = int((time.time() - start) * 1000)
         scan_id = _log_scan(source="file", findings=findings, file_name=filename,
             file_type=file_type, original_size=original_size, duration_ms=duration_ms)
@@ -317,10 +324,18 @@ async def scan_file_endpoint(
                 "X-Duration-Ms":       str(duration_ms),
                 "X-Original-Filename": filename,
                 "X-Findings-Summary":  json.dumps(findings_summary),
+                "X-PrivacyGate-State": verification["state"],
+                "X-PrivacyGate-Reason": verification["reason"],
+                "X-PrivacyGate-Original-Hash": verification["original_sha256"],
+                "X-PrivacyGate-Cleaned-Hash": verification["cleaned_sha256"],
+                "X-PrivacyGate-Remaining-PII": json.dumps(verification["remaining_pii"]),
                 "Access-Control-Expose-Headers": (
                     "X-Scan-Id,X-Findings-Count,X-Types-Found,"
                     "X-High-Count,X-Med-Count,X-Low-Count,"
-                    "X-Duration-Ms,X-Original-Filename,X-Findings-Summary"
+                    "X-Duration-Ms,X-Original-Filename,X-Findings-Summary,"
+                    "X-PrivacyGate-State,X-PrivacyGate-Reason,"
+                    "X-PrivacyGate-Original-Hash,X-PrivacyGate-Cleaned-Hash,"
+                    "X-PrivacyGate-Remaining-PII"
                 ),
             },
         )

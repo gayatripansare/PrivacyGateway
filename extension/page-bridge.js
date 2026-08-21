@@ -10,10 +10,12 @@
   const pending = new Map();
   let sequence = 0;
 
-  const isUpload = value => value instanceof File || value instanceof Blob;
-  const fileName = value => value instanceof File && value.name ? value.name : 'upload';
+  const tag = value => Object.prototype.toString.call(value);
+  const isFormData = value => Boolean(value && typeof value.entries === 'function' && typeof value.append === 'function' && (value instanceof FormData || tag(value) === '[object FormData]'));
+  const isUpload = value => Boolean(value && (value instanceof File || value instanceof Blob || tag(value) === '[object File]' || tag(value) === '[object Blob]') && typeof value.arrayBuffer === 'function');
+  const fileName = value => value && typeof value.name === 'string' && value.name ? value.name : 'upload';
   const hasFiles = body => {
-    if (!(body instanceof FormData)) return false;
+    if (!isFormData(body)) return false;
     for (const [, value] of body.entries()) if (isUpload(value)) return true;
     return false;
   };
@@ -70,7 +72,7 @@
     if (body === undefined && input instanceof Request) {
       try { body = input.clone().body; } catch (_) { body = undefined; }
     }
-    if (!(body instanceof FormData) || !hasFiles(body)) {
+    if (!isFormData(body) || !hasFiles(body)) {
       return nativeFetch.apply(this, arguments);
     }
     options.body = await cleanedFormData(body);
